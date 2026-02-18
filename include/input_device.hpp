@@ -1,8 +1,6 @@
 #ifndef INPUT_DEVICE_HPP
 #define INPUT_DEVICE_HPP
 
-
-#include <GLFW/glfw3.h>
 #include <unordered_map>
 
 class InputDevice

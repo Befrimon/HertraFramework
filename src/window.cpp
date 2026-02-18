@@ -25,7 +25,8 @@ HertraWindow::HertraWindow(int width, int height, const std::string& title)
 
 HertraWindow::~HertraWindow()
 {
-  glfwDestroyWindow(window);
+  if (window)
+    glfwDestroyWindow(window);
   glfwTerminate();
 }
 
