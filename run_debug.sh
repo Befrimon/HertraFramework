@@ -8,10 +8,10 @@ build()
 run()
 {
   if [[ -f "debug/HertraFramework" ]]; then
-    debug/HertraFramework
+    cd debug; ./HertraFramework; cd -
   else
     build
-    debug/HertraFramework
+    cd debug; ./HertraFramework; cd -
   fi
 }
 

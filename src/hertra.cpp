@@ -2,6 +2,7 @@
 
 #include <iostream>
 #include <vector>
+#include <cstdlib>
 
 HertraApp::HertraApp()
   : surface(VK_NULL_HANDLE), renderPass(VK_NULL_HANDLE), commandPool(VK_NULL_HANDLE), currentFrame(0), running(true)
@@ -25,22 +26,101 @@ HertraApp::~HertraApp()
 
 void HertraApp::initVulkan()
 {
-  createInstance();
-  createSurface();
+  std::cout << "=== initVulkan started ===" << std::endl;
 
+  std::cout << "[1/10] Creating instance..." << std::endl;
+  createInstance();
+  std::cout << "Instance created" << std::endl;
+
+  std::cout << "[2/10] Creating surface..." << std::endl;
+  createSurface();
+  std::cout << "Surface created" << std::endl;
+
+  std::cout << "[3/10] Creating device..." << std::endl;
   device = std::make_unique<VulkanDevice>();
   device->init(instance, surface);
+  std::cout << "Device created" << std::endl;
 
+  std::cout << "[4/10] Creating swapchain..." << std::endl;
   swapChain = std::make_unique<SwapChain>(*device, surface, window->getWindow());
   swapChain->init();
+  std::cout << "Swapchain created" << std::endl;
 
+  std::cout << "[5/10] Creating depth buffer..." << std::endl;
+  createDepthBuffer();
+  std::cout << "Depth buffer created" << std::endl;
+
+  std::cout << "[6/10] Creating render pass..." << std::endl;
   createRenderPass();
-  createFramebuffers();
-  createCommandPool();
-  createCommandBuffers();
-  createSyncObjects();
+  std::cout << "Render pass created" << std::endl;
 
-  std::cout << "Vulkan initialized successfully!" << std::endl;
+  std::cout << "[7/10] Creating framebuffers..." << std::endl;
+  createFramebuffers();
+  std::cout << "Framebuffers created" << std::endl;
+
+  std::cout << "[8/10] Creating command pool..." << std::endl;
+  createCommandPool();
+  std::cout << "Command pool created" << std::endl;
+
+  std::cout << "[9/10] Creating shader..." << std::endl;
+  shader = std::make_unique<Shader>(device->getDevice(), "shaders/vert.spv", "shaders/frag.spv");
+  std::cout << "Shader created" << std::endl;
+
+  std::cout << "[10/10] Creating cube..." << std::endl;
+  cube = std::make_unique<Cube>(
+    device->getPhysicalDevice(), device->getDevice(), commandPool, device->getGraphicsQueue()
+  );
+  std::cout << "Cube created" << std::endl;
+
+  uniformBuffer = std::make_unique<UniformBuffer>(
+    device->getPhysicalDevice(), device->getDevice(), swapChain->getImages().size()
+  );
+  std::cout << "Uniform buffer created" << std::endl;
+
+  descriptor = std::make_unique<Descriptor>(
+    device->getPhysicalDevice(), device->getDevice(), swapChain->getImages().size()
+  );
+  std::cout << "Descriptor created" << std::endl;
+
+  pipeline = std::make_unique<GraphicsPipeline>(
+    device->getDevice(), swapChain->getExtent(), renderPass, *shader, descriptor->getPipelineLayout()
+  );
+  std::cout << "Pipeline created" << std::endl;
+
+  createCommandBuffers();
+  std::cout << "Command buffers created" << std::endl;
+
+  createSyncObjects();
+  std::cout << "Sync objects created" << std::endl;
+
+  std::cout << "=== initVulkan completed ===" << std::endl;
+}
+
+void HertraApp::updateUniformBuffer(uint32_t currentImage)
+{
+  static auto startTime = std::chrono::high_resolution_clock::now();
+  auto currentTime = std::chrono::high_resolution_clock::now();
+  float time = std::chrono::duration<float, std::chrono::seconds::period>(currentTime - startTime).count();
+
+  UniformBufferObject ubo{};
+  ubo.model = glm::rotate(glm::mat4(1.0f), time * glm::radians(90.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+  ubo.view = glm::lookAt(glm::vec3(2.0f, 2.0f, 2.0f), glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+  ubo.proj = glm::perspective(
+    glm::radians(45.0f), swapChain->getExtent().width / (float)swapChain->getExtent().height, 0.1f, 10.0f
+  );
+  ubo.proj[1][1] *= -1; // Flip Y for Vulkan
+
+  ubo.lightPos = glm::vec3(2.0f, 2.0f, 2.0f);
+  ubo.viewPos = glm::vec3(2.0f, 2.0f, 2.0f);
+  ubo.lightColor = glm::vec3(1.0f, 1.0f, 1.0f);
+
+  uniformBuffer->update(currentImage, ubo);
+  descriptor->update(currentImage, *uniformBuffer);
+}
+
+void HertraApp::createDepthBuffer()
+{
+  depthBuffer = std::make_unique<DepthBuffer>(device->getPhysicalDevice(),device->getDevice(), swapChain->getExtent());
 }
 
 void HertraApp::createInstance()
@@ -82,6 +162,7 @@ void HertraApp::createSurface()
 
 void HertraApp::createRenderPass()
 {
+  // Color attachment
   VkAttachmentDescription colorAttachment{};
   colorAttachment.format = swapChain->getImageFormat();
   colorAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
@@ -92,9 +173,24 @@ void HertraApp::createRenderPass()
   colorAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
   colorAttachment.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
 
+  // Depth attachment
+  VkAttachmentDescription depthAttachment{};
+  depthAttachment.format = depthBuffer->getFormat();
+  depthAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
+  depthAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+  depthAttachment.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+  depthAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+  depthAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+  depthAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+  depthAttachment.finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+
   VkAttachmentReference colorAttachmentRef{};
   colorAttachmentRef.attachment = 0;
   colorAttachmentRef.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+
+  VkAttachmentReference depthAttachmentRef{};
+  depthAttachmentRef.attachment = 1;
+  depthAttachmentRef.layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
 
   VkSubpassDescription subpass{};
   subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
@@ -109,10 +205,12 @@ void HertraApp::createRenderPass()
   dependency.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
   dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
 
+  std::array<VkAttachmentDescription, 2> attachments = {colorAttachment, depthAttachment};
+
   VkRenderPassCreateInfo renderPassInfo{};
   renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
-  renderPassInfo.attachmentCount = 1;
-  renderPassInfo.pAttachments = &colorAttachment;
+  renderPassInfo.attachmentCount = static_cast<uint32_t>(attachments.size());
+  renderPassInfo.pAttachments = attachments.data();
   renderPassInfo.subpassCount = 1;
   renderPassInfo.pSubpasses = &subpass;
   renderPassInfo.dependencyCount = 1;
@@ -141,16 +239,17 @@ void HertraApp::createFramebuffers()
 
   for (size_t i = 0; i < swapChain->getImageViews().size(); i++)
   {
-    VkImageView attachments[] =
+    std::array<VkImageView, 2> attachments =
     {
-      swapChain->getImageViews()[i]
+      swapChain->getImageViews()[i],
+      depthBuffer->getImageView()
     };
 
     VkFramebufferCreateInfo framebufferInfo{};
     framebufferInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
     framebufferInfo.renderPass = renderPass;
-    framebufferInfo.attachmentCount = 1;
-    framebufferInfo.pAttachments = attachments;
+    framebufferInfo.attachmentCount = static_cast<uint32_t>(attachments.size());
+    framebufferInfo.pAttachments = attachments.data();
     framebufferInfo.width = swapChain->getExtent().width;
     framebufferInfo.height = swapChain->getExtent().height;
     framebufferInfo.layers = 1;
@@ -175,7 +274,6 @@ void HertraApp::createCommandBuffers()
   if (vkAllocateCommandBuffers(device->getDevice(), &allocInfo, commandBuffers.data()) != VK_SUCCESS)
     throw std::runtime_error("Failed to allocate command buffers!");
 
-  // Record command buffers
   for (size_t i = 0; i < commandBuffers.size(); i++)
   {
     VkCommandBufferBeginInfo beginInfo{};
@@ -191,11 +289,43 @@ void HertraApp::createCommandBuffers()
     renderPassInfo.renderArea.offset = {0, 0};
     renderPassInfo.renderArea.extent = swapChain->getExtent();
 
-    VkClearValue clearColor = {{{0.1f, 0.2f, 0.3f, 1.0f}}}; // Blue-ish color
-    renderPassInfo.clearValueCount = 1;
-    renderPassInfo.pClearValues = &clearColor;
+    std::array<VkClearValue, 2> clearValues{};
+    clearValues[0].color = {{0.05f, 0.05f, 0.05f, 1.0f}};
+    clearValues[1].depthStencil = {1.0f, 0};
+
+    renderPassInfo.clearValueCount = static_cast<uint32_t>(clearValues.size());
+    renderPassInfo.pClearValues = clearValues.data();
 
     vkCmdBeginRenderPass(commandBuffers[i], &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
+    vkCmdBindPipeline(commandBuffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline->getPipeline());
+
+    VkViewport viewport{};
+    viewport.x = 0.0f;
+    viewport.y = 0.0f;
+    viewport.width = static_cast<float>(swapChain->getExtent().width);
+    viewport.height = static_cast<float>(swapChain->getExtent().height);
+    viewport.minDepth = 0.0f;
+    viewport.maxDepth = 1.0f;
+    vkCmdSetViewport(commandBuffers[i], 0, 1, &viewport);
+
+    VkRect2D scissor{};
+    scissor.offset = {0, 0};
+    scissor.extent = swapChain->getExtent();
+    vkCmdSetScissor(commandBuffers[i], 0, 1, &scissor);
+
+    VkBuffer vertexBuffers[] = {cube->getVertexBuffer()};
+    VkDeviceSize offsets[] = {0};
+    vkCmdBindVertexBuffers(commandBuffers[i], 0, 1, vertexBuffers, offsets);
+
+    vkCmdBindIndexBuffer(commandBuffers[i], cube->getIndexBuffer(), 0, VK_INDEX_TYPE_UINT32);
+
+    VkDescriptorSet descriptorSet = descriptor->getDescriptorSet(i);
+    vkCmdBindDescriptorSets(
+      commandBuffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS,
+      descriptor->getPipelineLayout(), 0, 1, &descriptorSet, 0, nullptr
+    );
+
+    vkCmdDrawIndexed(commandBuffers[i], cube->getIndexCount(), 1, 0, 0, 0);
     vkCmdEndRenderPass(commandBuffers[i]);
 
     if (vkEndCommandBuffer(commandBuffers[i]) != VK_SUCCESS)
@@ -230,28 +360,119 @@ void HertraApp::createSyncObjects()
 
 void HertraApp::cleanup()
 {
-  vkDeviceWaitIdle(device->getDevice());
+  std::cout << "=== Starting cleanup ===" << std::endl;
 
-  for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
+  if (device && device->getDevice() != VK_NULL_HANDLE)
   {
-    vkDestroySemaphore(device->getDevice(), renderFinishedSemaphores[i], nullptr);
-    vkDestroySemaphore(device->getDevice(), imageAvailableSemaphores[i], nullptr);
-    vkDestroyFence(device->getDevice(), inFlightFences[i], nullptr);
+    std::cout << "Waiting for device idle..." << std::endl;
+    vkDeviceWaitIdle(device->getDevice());
   }
 
-  for (auto framebuffer : swapChainFramebuffers)
-    vkDestroyFramebuffer(device->getDevice(), framebuffer, nullptr);
-  swapChainFramebuffers.clear();
+  // 1. Pipeline (использует shader + pipeline layout)
+  std::cout << "[1/13] Destroying pipeline..." << std::endl;
+  pipeline.reset();
 
-  vkDestroyCommandPool(device->getDevice(), commandPool, nullptr);
-  vkDestroyRenderPass(device->getDevice(), renderPass, nullptr);
+  // 2. Shader (нужен device)
+  std::cout << "[2/13] Destroying shader..." << std::endl;
+  shader.reset();
 
-  swapChain->cleanup();
-  device->cleanup();
-  if (surface != VK_NULL_HANDLE)
+  // 3. Descriptor (содержит pipeline layout, нужен device)
+  std::cout << "[3/13] Destroying descriptor..." << std::endl;
+  descriptor.reset();
+
+  // 4. Cube (vertex/index buffers, нужен device)
+  std::cout << "[4/13] Destroying cube..." << std::endl;
+  cube.reset();
+
+  // 5. Uniform buffer (нужен device)
+  std::cout << "[5/13] Destroying uniform buffer..." << std::endl;
+  uniformBuffer.reset();
+
+  std::cout << "[6/13] Destroying uniform buffer..." << std::endl;
+  depthBuffer.reset();
+
+  // 6. SwapChain (нужен device)
+  std::cout << "[7/13] Destroying swapchain..." << std::endl;
+  swapChain.reset();
+
+  // 7. Command buffers
+  std::cout << "[8/13] Clearing command buffers..." << std::endl;
+  commandBuffers.clear();
+
+  // 8. Sync objects
+  std::cout << "[9/13] Destroying sync objects..." << std::endl;
+  for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
+  {
+    if (device && device->getDevice() != VK_NULL_HANDLE)
+    {
+      if (renderFinishedSemaphores[i] != VK_NULL_HANDLE)
+      {
+        vkDestroySemaphore(device->getDevice(), renderFinishedSemaphores[i], nullptr);
+        renderFinishedSemaphores[i] = VK_NULL_HANDLE;
+      }
+      if (imageAvailableSemaphores[i] != VK_NULL_HANDLE)
+      {
+        vkDestroySemaphore(device->getDevice(), imageAvailableSemaphores[i], nullptr);
+        imageAvailableSemaphores[i] = VK_NULL_HANDLE;
+      }
+      if (inFlightFences[i] != VK_NULL_HANDLE)
+      {
+        vkDestroyFence(device->getDevice(), inFlightFences[i], nullptr);
+        inFlightFences[i] = VK_NULL_HANDLE;
+      }
+    }
+  }
+
+  // 9. Command pool
+  std::cout << "[10/13] Destroying command pool..." << std::endl;
+  if (device && device->getDevice() != VK_NULL_HANDLE && commandPool != VK_NULL_HANDLE)
+  {
+    vkDestroyCommandPool(device->getDevice(), commandPool, nullptr);
+    commandPool = VK_NULL_HANDLE;
+  }
+
+  // 10. Framebuffers
+  std::cout << "[11/13] Destroying framebuffers..." << std::endl;
+  if (device && device->getDevice() != VK_NULL_HANDLE)
+  {
+    for (auto& framebuffer : swapChainFramebuffers)
+      if (framebuffer != VK_NULL_HANDLE)
+      {
+        vkDestroyFramebuffer(device->getDevice(), framebuffer, nullptr);
+        framebuffer = VK_NULL_HANDLE;
+      }
+    swapChainFramebuffers.clear();
+  }
+
+  // 11. Render pass
+  std::cout << "[12/13] Destroying render pass..." << std::endl;
+  if (device && device->getDevice() != VK_NULL_HANDLE && renderPass != VK_NULL_HANDLE)
+  {
+    vkDestroyRenderPass(device->getDevice(), renderPass, nullptr);
+    renderPass = VK_NULL_HANDLE;
+  }
+
+  // 12. Device
+  std::cout << "[13/13] Destroying device..." << std::endl;
+  device.reset();
+
+  // Surface
+  std::cout << "Destroying surface..." << std::endl;
+  if (instance != VK_NULL_HANDLE && surface != VK_NULL_HANDLE)
+  {
     vkDestroySurfaceKHR(instance, surface, nullptr);
+    surface = VK_NULL_HANDLE;
+  }
+
+  // Instance
+  std::cout << "Destroying instance..." << std::endl;
   if (instance != VK_NULL_HANDLE)
+  {
     vkDestroyInstance(instance, nullptr);
+    instance = VK_NULL_HANDLE;
+  }
+
+  std::cout << "=== Cleanup completed ===" << std::endl;
 }
 
 void HertraApp::processInput()
@@ -277,6 +498,7 @@ void HertraApp::drawFrame()
   } else if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR)
     throw std::runtime_error("Failed to acquire swap chain image!");
 
+  updateUniformBuffer(imageIndex);
   vkResetFences(device->getDevice(), 1, &inFlightFences[currentFrame]);
 
   VkSubmitInfo submitInfo{};
@@ -310,7 +532,11 @@ void HertraApp::drawFrame()
   result = vkQueuePresentKHR(device->getPresentQueue(), &presentInfo);
 
   if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR)
+  {
     swapChain->recreate();
+    createFramebuffers();
+    createCommandBuffers();
+  }
   else if (result != VK_SUCCESS)
     throw std::runtime_error("Failed to present swap chain image!");
 
